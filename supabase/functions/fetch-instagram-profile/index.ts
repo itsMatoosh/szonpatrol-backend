@@ -22,7 +22,6 @@ interface HikerApiProfilePayload {
 type InstagramProfile = Omit<HikerApiProfilePayload, "pk" | "profile_pic_url"> & {
   id: number;
   updated_at: string;
-  created_at?: string;
   profile_pic_url?: string | null;
 };
 
