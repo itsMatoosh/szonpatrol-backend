@@ -18,6 +18,12 @@ interface HikerApiProfilePayload {
   external_url: string | null;
 }
 
+type InstagramProfile = Omit<HikerApiProfilePayload, "pk"> & {
+  id: number;
+  updated_at: string;
+  created_at?: string;
+};
+
 Deno.serve(async (req) => {
   const { username } = await req.json()
 
@@ -43,12 +49,12 @@ Deno.serve(async (req) => {
     .from("instagram_profiles")
     .select("*")
     .eq("username", usernameFormatted)
-    .maybeSingle();
+    .maybeSingle<InstagramProfile>();
 
   // If cached, return the profile
   if (cached) {
     // Check if the profile is fresh
-    const updatedAtMs = new Date(cached.updated_at as string).getTime();
+    const updatedAtMs = new Date(cached.updated_at).getTime();
     const isFresh = now - updatedAtMs < ttlMs;
     if (isFresh) {
       return new Response(
@@ -64,9 +70,9 @@ Deno.serve(async (req) => {
   }
 
   // Fetch Instagram profile from the web
-  let profile: HikerApiProfilePayload | null;
+  let profileInfo: HikerApiProfilePayload | null;
   try {
-    profile = await fetchProfile(usernameFormatted);
+    profileInfo = await fetchProfile(usernameFormatted);
   } catch (error) {
     return new Response(
       JSON.stringify({ error: (error as Error).message }),
@@ -75,28 +81,31 @@ Deno.serve(async (req) => {
   }
 
   // If profile is not found, return 404
-  if (!profile) {
+  if (!profileInfo) {
     return new Response(
       JSON.stringify({ error: "Instagram profile not found" }),
       { status: 404, headers: { "Content-Type": "application/json" } },
     );
   }
 
+  // Create Instagram profile
+  const profile: InstagramProfile = {
+    id: profileInfo.pk,
+    username: usernameFormatted,
+    full_name: profileInfo.full_name,
+    profile_pic_url: profileInfo.profile_pic_url,
+    biography: profileInfo.biography,
+    external_url: profileInfo.external_url,
+    is_private: profileInfo.is_private,
+    is_verified: profileInfo.is_verified,
+    is_business: profileInfo.is_business,
+    updated_at: new Date().toISOString(),
+  };
+
   // Cache profile in Supabase DB (best-effort)
   await supabase
     .from("instagram_profiles")
-    .upsert({
-      pk: profile.pk,
-      username: usernameFormatted,
-      full_name: profile.full_name,
-      profile_pic_url: profile.profile_pic_url,
-      biography: profile.biography,
-      external_url: profile.external_url,
-      is_private: profile.is_private,
-      is_verified: profile.is_verified,
-      is_business: profile.is_business,
-      updated_at: new Date().toISOString(),
-    }, { onConflict: "pk" });
+    .upsert<InstagramProfile>(profile, { onConflict: "id" });
 
   // Return profile
   return new Response(
