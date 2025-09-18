@@ -1,5 +1,6 @@
 import "jsr:@supabase/functions-js/edge-runtime.d.ts"
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { log } from "node:console";
 
 /**
  * Regex for validating Instagram usernames
@@ -18,10 +19,11 @@ interface HikerApiProfilePayload {
   external_url: string | null;
 }
 
-type InstagramProfile = Omit<HikerApiProfilePayload, "pk"> & {
+type InstagramProfile = Omit<HikerApiProfilePayload, "pk" | "profile_pic_url"> & {
   id: number;
   updated_at: string;
   created_at?: string;
+  profile_pic_url?: string | null;
 };
 
 Deno.serve(async (req) => {
@@ -93,7 +95,6 @@ Deno.serve(async (req) => {
     id: profileInfo.pk,
     username: usernameFormatted,
     full_name: profileInfo.full_name,
-    profile_pic_url: profileInfo.profile_pic_url,
     biography: profileInfo.biography,
     external_url: profileInfo.external_url,
     is_private: profileInfo.is_private,
@@ -101,6 +102,27 @@ Deno.serve(async (req) => {
     is_business: profileInfo.is_business,
     updated_at: new Date().toISOString(),
   };
+
+  // Cache profile picture
+  if (profileInfo.profile_pic_url) {
+    // Download profile picture
+    const profilePicture = await downloadProfilePicture(profileInfo.profile_pic_url);
+    if (profilePicture) {
+      // Cache profile picture
+      console.log(`Caching profile picture: ${profileInfo.profile_pic_url}`);
+      const {data, error} = await supabase.storage.from("instagram_profile_pictures")
+        .upload(`${profile.id}/profile_pic.jpg`, profilePicture, {
+            upsert: true,
+          });
+      if (error) {
+        console.error(`Failed to cache profile picture: ${JSON.stringify(error)}`);
+      } else {
+        // Get public URL
+        const {data: {publicUrl}} = supabase.storage.from("instagram_profile_pictures").getPublicUrl(data.path);
+        profile.profile_pic_url = publicUrl;
+      }
+    }
+  }
 
   // Cache profile in Supabase DB (best-effort)
   await supabase
@@ -137,4 +159,20 @@ async function fetchProfile(username: string): Promise<HikerApiProfilePayload | 
   }
   const data = await res.json();
   return data as HikerApiProfilePayload;
+}
+
+/**
+ * Downloads a profile picture from the web
+ * @param url - The URL of the profile picture to download
+ * @returns The profile picture data
+ */
+async function downloadProfilePicture(url: string): Promise<Blob | null> {
+  console.log(`Downloading profile picture: ${url}`);
+  const res = await fetch(url);
+  console.log(`Profile picture downloaded: ${res.status} ${res.statusText}`);
+  if (!res.ok) {
+    console.error(`Failed to download profile picture: ${res.status} ${res.statusText}`);
+    return null;
+  }
+  return await res.blob();
 }
